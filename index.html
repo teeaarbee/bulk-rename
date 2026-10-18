@@ -71,8 +71,12 @@
   <div class="card">
     <h2>2 · What to change</h2>
     <div class="rules">
+      <div class="rule" data-rule="dblExt">
+        <label><input type="checkbox" id="r_dblExt"> <span class="name">Repeat the extension (what Premiere asks for)</span></label>
+        <span class="hint"><code>C0012.MP4</code> → <code>C0012.MP4.mp4</code> · <code>IMG_4410.MOV</code> → <code>IMG_4410.MOV.mov</code></span>
+      </div>
       <div class="rule" data-rule="dropExt">
-        <label><input type="checkbox" id="r_dropExt"> <span class="name">Remove the extra extension</span></label>
+        <label><input type="checkbox" id="r_dropExt"> <span class="name">Remove the extra extension (undo the above)</span></label>
         <span class="hint"><code>C0012.MP4.mp4</code> → <code>C0012.MP4</code></span>
       </div>
       <div class="rule" data-rule="addExt">
@@ -184,14 +188,18 @@ function afterLoad() {
   refresh();
 }
 
-// If the folder is full of X.MP4.mp4 files, tick the matching rule for them.
+// Premiere usually wants X.MP4.mp4; if the folder already has those, offer the reverse.
 function autoSuggest() {
   if (anyRuleOn()) return;
-  const dbl = items.filter(i => /\.[a-z0-9]{2,5}\.[a-z0-9]{2,5}$/i.test(i.name)).length;
-  if (dbl && dbl >= items.length / 2) $('r_dropExt').checked = true;
+  const dbl = items.filter(i => isDoubled(i.name)).length;
+  if (!items.length) return;
+  if (dbl > items.length / 2) $('r_dropExt').checked = true;
+  else $('r_dblExt').checked = true;
 }
 
-function anyRuleOn() { return ['dropExt','addExt','replace','affix','extCase'].some(r => $('r_' + r).checked); }
+function anyRuleOn() { return ['dblExt','dropExt','addExt','replace','affix','extCase'].some(r => $('r_' + r).checked); }
+
+function isDoubled(n) { const [b, e] = splitExt(n); return !!e && splitExt(b)[1].toLowerCase() === e.toLowerCase(); }
 
 function splitExt(n) { const i = n.lastIndexOf('.'); return i > 0 ? [n.slice(0, i), n.slice(i)] : [n, '']; }
 
@@ -199,7 +207,11 @@ function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 function computeNew(name) {
   let n = name;
-  if ($('r_dropExt').checked && /\.[A-Za-z0-9]{2,5}\.[A-Za-z0-9]{2,5}$/.test(n)) n = splitExt(n)[0];
+  if ($('r_dblExt').checked) {
+    const e = splitExt(n)[1];
+    if (e && !isDoubled(n)) n = n + e.toLowerCase();  // skip if already X.MP4.mp4
+  }
+  if ($('r_dropExt').checked && isDoubled(n)) n = splitExt(n)[0];
   if ($('r_addExt').checked) {
     let ext = $('addExtVal').value.trim();
     if (ext && !ext.startsWith('.')) ext = '.' + ext;
