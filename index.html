@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bulk Rename — fix file names for Premiere</title>
+<style>
+  :root { --bg:#0f1115; --card:#181b22; --line:#2a2f3a; --text:#e8eaf0; --dim:#9aa3b2; --acc:#4f8cff; --ok:#3ecf8e; --bad:#ff5d5d; --warn:#f5b041; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:1100px; margin:0 auto; padding:24px 18px 80px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--dim); margin:0 0 20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:14px; }
+  .card h2 { font-size:14px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); margin:0 0 12px; }
+  .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+  button, .btn { background:#262b36; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:9px 14px; font:inherit; cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--acc); }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#fff; font-weight:600; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  input[type=text] { background:#0f1115; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font:inherit; min-width:0; }
+  label { display:inline-flex; gap:6px; align-items:center; cursor:pointer; }
+  .rules { display:grid; gap:12px; }
+  .rule { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:10px 12px; border:1px solid var(--line); border-radius:10px; }
+  .rule.on { border-color:var(--acc); background:#1b2233; }
+  .rule .name { font-weight:600; min-width:220px; }
+  .hint { color:var(--dim); font-size:13px; }
+  code { background:#0f1115; padding:1px 5px; border-radius:4px; font-size:13px; }
+  table { width:100%; border-collapse:collapse; font-size:13.5px; }
+  th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; word-break:break-all; }
+  th { color:var(--dim); font-weight:500; position:sticky; top:0; background:var(--card); }
+  td.arrow { color:var(--dim); width:24px; }
+  tr.same td { color:var(--dim); }
+  tr.changed td.new { color:var(--ok); }
+  tr.conflict td.new { color:var(--bad); }
+  tr.done td.new { color:var(--ok); font-weight:600; }
+  tr.failed td.new { color:var(--bad); }
+  .tablewrap { max-height:55vh; overflow:auto; border:1px solid var(--line); border-radius:8px; }
+  .stats { color:var(--dim); margin:10px 0; }
+  .stats b { color:var(--text); }
+  .note { border-left:3px solid var(--warn); padding:8px 12px; background:#2a2416; border-radius:6px; color:#f3dcaa; font-size:14px; margin-bottom:14px; }
+  .msg { margin-top:10px; font-size:14px; }
+  .msg.ok { color:var(--ok); } .msg.bad { color:var(--bad); }
+  .hidden { display:none !important; }
+  footer { color:var(--dim); font-size:12.5px; margin-top:26px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Bulk Rename</h1>
+  <p class="sub">Rename a whole folder of clips at once so Premiere finds them. Everything happens on your computer — no files are uploaded anywhere.</p>
+
+  <div id="noFsa" class="note hidden">
+    This browser can't rename files directly (works in <b>Chrome or Edge on a computer</b>).
+    You can still pick the files here, then download a small rename script and double-click it inside that folder.
+  </div>
+
+  <div class="card">
+    <h2>1 · Choose your files</h2>
+    <div class="row">
+      <button id="pickFolder" class="primary">Open folder…</button>
+      <label class="btn" id="pickFilesLbl">Pick folder (script mode)
+        <input id="pickFilesInput" type="file" webkitdirectory multiple class="hidden">
+      </label>
+      <label><input type="checkbox" id="recursive" checked> Include subfolders</label>
+      <label><input type="checkbox" id="onlyMedia" checked> Only video / audio / image files</label>
+    </div>
+    <div id="folderInfo" class="hint" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
+    <h2>2 · What to change</h2>
+    <div class="rules">
+      <div class="rule" data-rule="dropExt">
+        <label><input type="checkbox" id="r_dropExt"> <span class="name">Remove the extra extension</span></label>
+        <span class="hint"><code>C0012.MP4.mp4</code> → <code>C0012.MP4</code></span>
+      </div>
+      <div class="rule" data-rule="addExt">
+        <label><input type="checkbox" id="r_addExt"> <span class="name">Add an extension at the end</span></label>
+        <input type="text" id="addExtVal" value=".mp4" size="7">
+        <span class="hint"><code>C0012.MP4</code> → <code>C0012.MP4.mp4</code> (skips files that already end with it)</span>
+      </div>
+      <div class="rule" data-rule="replace">
+        <label><input type="checkbox" id="r_replace"> <span class="name">Find &amp; replace</span></label>
+        <input type="text" id="findVal" placeholder="find" size="16">
+        <input type="text" id="replVal" placeholder="replace with (blank = delete)" size="22">
+        <label><input type="checkbox" id="matchCase"> Match case</label>
+        <label><input type="checkbox" id="useRegex"> Regex</label>
+      </div>
+      <div class="rule" data-rule="affix">
+        <label><input type="checkbox" id="r_affix"> <span class="name">Add text before / after the name</span></label>
+        <input type="text" id="prefixVal" placeholder="prefix" size="12">
+        <input type="text" id="suffixVal" placeholder="suffix (before .ext)" size="16">
+      </div>
+      <div class="rule" data-rule="extCase">
+        <label><input type="checkbox" id="r_extCase"> <span class="name">Extension case</span></label>
+        <label><input type="radio" name="extCase" value="lower" checked> .mp4</label>
+        <label><input type="radio" name="extCase" value="upper"> .MP4</label>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3 · Check and rename</h2>
+    <div class="stats" id="stats">No files yet.</div>
+    <div class="row" style="margin-bottom:10px">
+      <label><input type="checkbox" id="onlyChanged" checked> Show only files that will change</label>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Current name</th><th></th><th>New name</th></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button id="applyBtn" class="primary" disabled>Rename files</button>
+      <button id="undoBtn" disabled>Undo last rename</button>
+      <button id="batBtn" disabled>Download Windows script (.bat)</button>
+      <button id="shBtn" disabled>Download Mac script (.command)</button>
+    </div>
+    <div id="msg" class="msg"></div>
+    <p class="hint" style="margin-top:12px">Scripts: put the downloaded file <b>inside the folder you picked</b> and double-click it.
+      On Mac: open Terminal, type <code>bash </code>, drag the script in, press Enter.</p>
+  </div>
+
+  <footer>Runs entirely in your browser. Nothing is uploaded. Renaming is in place — files are not copied.</footer>
+</main>
+
+<script>
+const MEDIA = /\.(mp4|mov|mxf|m4v|mkv|avi|mts|m2ts|wmv|webm|r3d|braw|crm|mpg|mpeg|3gp|wav|mp3|aac|m4a|aif|aiff|flac|ogg|jpg|jpeg|png|tif|tiff|psd|heic|dng|cr2|cr3|arw|nef|gif|srt|xml)$/i;
+const hasFSA = 'showDirectoryPicker' in window;
+const $ = id => document.getElementById(id);
+
+// items: {path:"sub/old.mp4", dir:"sub", name:"old.mp4", dirHandle?, newName}
+let items = [];
+let mode = null;          // 'fsa' | 'script'
+let rootName = '';
+let lastRenames = [];     // [{dirHandle, from, to}] for undo
+
+if (!hasFSA) { $('noFsa').classList.remove('hidden'); $('pickFolder').classList.add('hidden'); }
+
+function skipName(n) { return n.startsWith('.') || n === 'Thumbs.db' || n === 'desktop.ini'; }
+
+$('pickFolder').onclick = async () => {
+  let root;
+  try { root = await window.showDirectoryPicker({ mode: 'readwrite' }); }
+  catch (e) { return; }
+  mode = 'fsa'; rootName = root.name; items = []; lastRenames = []; $('undoBtn').disabled = true;
+  setMsg('Reading folder…');
+  await walk(root, '', $('recursive').checked);
+  afterLoad();
+};
+
+async function walk(dirHandle, dirPath, recursive) {
+  for await (const [name, h] of dirHandle.entries()) {
+    if (skipName(name)) continue;
+    if (h.kind === 'file') items.push({ path: dirPath ? dirPath + '/' + name : name, dir: dirPath, name, dirHandle, handle: h });
+    else if (recursive) await walk(h, dirPath ? dirPath + '/' + name : name, true);
+  }
+}
+
+$('pickFilesInput').onchange = (e) => {
+  const files = [...e.target.files];
+  if (!files.length) return;
+  mode = 'script'; items = []; lastRenames = []; $('undoBtn').disabled = true;
+  rootName = files[0].webkitRelativePath.split('/')[0];
+  const recursive = $('recursive').checked;
+  for (const f of files) {
+    const parts = f.webkitRelativePath.split('/').slice(1); // drop the picked folder itself
+    const name = parts.pop();
+    if (skipName(name) || parts.some(skipName)) continue;
+    if (!recursive && parts.length) continue;
+    const dir = parts.join('/');
+    items.push({ path: dir ? dir + '/' + name : name, dir, name });
+  }
+  e.target.value = '';
+  afterLoad();
+};
+
+function afterLoad() {
+  items.sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true }));
+  autoSuggest();
+  setMsg('');
+  refresh();
+}
+
+// If the folder is full of X.MP4.mp4 files, tick the matching rule for them.
+function autoSuggest() {
+  if (anyRuleOn()) return;
+  const dbl = items.filter(i => /\.[a-z0-9]{2,5}\.[a-z0-9]{2,5}$/i.test(i.name)).length;
+  if (dbl && dbl >= items.length / 2) $('r_dropExt').checked = true;
+}
+
+function anyRuleOn() { return ['dropExt','addExt','replace','affix','extCase'].some(r => $('r_' + r).checked); }
+
+function splitExt(n) { const i = n.lastIndexOf('.'); return i > 0 ? [n.slice(0, i), n.slice(i)] : [n, '']; }
+
+function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+function computeNew(name) {
+  let n = name;
+  if ($('r_dropExt').checked && /\.[A-Za-z0-9]{2,5}\.[A-Za-z0-9]{2,5}$/.test(n)) n = splitExt(n)[0];
+  if ($('r_addExt').checked) {
+    let ext = $('addExtVal').value.trim();
+    if (ext && !ext.startsWith('.')) ext = '.' + ext;
+    if (ext && !n.toLowerCase().endsWith(ext.toLowerCase())) n = n + ext;
+  }
+  if ($('r_replace').checked && $('findVal').value) {
+    const flags = 'g' + ($('matchCase').checked ? '' : 'i');
+    let re;
+    try { re = new RegExp($('useRegex').checked ? $('findVal').value : escapeRe($('findVal').value), flags); }
+    catch (e) { re = null; }
+    if (re) n = n.replace(re, $('replVal').value);
+  }
+  if ($('r_affix').checked) {
+    const [b, e] = splitExt(n);
+    n = $('prefixVal').value + b + $('suffixVal').value + e;
+  }
+  if ($('r_extCase').checked) {
+    const [b, e] = splitExt(n);
+    n = b + (document.querySelector('input[name=extCase]:checked').value === 'upper' ? e.toUpperCase() : e.toLowerCase());
+  }
+  return n.trim();
+}
+
+const BAD_CHARS = /[\\/:*?"<>|]/;
+
+function refresh() {
+  document.querySelectorAll('.rule').forEach(r => r.classList.toggle('on', $('r_' + r.dataset.rule).checked));
+  // conflict detection, case-insensitive (Windows + Mac disks are case-insensitive)
+  const key = (dir, n) => (dir + '/' + n).toLowerCase();
+  const staying = new Map(); // names that keep existing after rename
+  for (const it of items) {
+    it.newName = computeNew(it.name);
+    it.status = it.newName === it.name ? 'same' : 'changed';
+    it.problem = '';
+  }
+  for (const it of items) staying.set(key(it.dir, it.status === 'same' ? it.name : it.newName), (staying.get(key(it.dir, it.status === 'same' ? it.name : it.newName)) || 0) + 1);
+  for (const it of items) {
+    if (it.status !== 'changed') continue;
+    if (!it.newName) it.problem = 'empty name';
+    else if (BAD_CHARS.test(it.newName)) it.problem = 'name has \\ / : * ? " < > |';
+    else if (staying.get(key(it.dir, it.newName)) > 1) it.problem = 'two files would get this name';
+    if (it.problem) it.status = 'conflict';
+  }
+  render();
+}
+
+function render() {
+  const onlyChanged = $('onlyChanged').checked;
+  const changed = items.filter(i => i.status === 'changed').length;
+  const conflicts = items.filter(i => i.status === 'conflict').length;
+  const rows = [];
+  let shown = 0;
+  for (const it of items) {
+    if (onlyChanged && it.status === 'same') continue;
+    if (++shown > 3000) break;
+    const dirLabel = it.dir ? `<span class="hint">${esc(it.dir)}/</span>` : '';
+    rows.push(`<tr class="${it.status}"><td>${dirLabel}${esc(it.name)}</td><td class="arrow">→</td><td class="new">${esc(it.newName)}${it.problem ? ` <span class="hint">(${esc(it.problem)})</span>` : ''}</td></tr>`);
+  }
+  $('tbody').innerHTML = rows.join('') || `<tr><td colspan="3" class="hint">${items.length ? 'Nothing will change with the current settings — tick a rule above.' : 'Pick a folder first.'}</td></tr>`;
+  $('stats').innerHTML = items.length
+    ? `Folder <b>${esc(rootName)}</b>: <b>${items.length}</b> files · <b>${changed}</b> will be renamed` + (conflicts ? ` · <b style="color:var(--bad)">${conflicts}</b> blocked (red)` : '')
+    : 'No files yet.';
+  $('folderInfo').textContent = items.length ? `${mode === 'fsa' ? 'Rename mode' : 'Script mode'} · ${items.length} files loaded` : '';
+  $('applyBtn').disabled = !(mode === 'fsa' && changed);
+  $('batBtn').disabled = $('shBtn').disabled = !changed;
+}
+
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c])); }
+function setMsg(t, cls = '') { $('msg').textContent = t; $('msg').className = 'msg ' + cls; }
+
+// "only media" filter is applied at load-time list level
+const _origAfterLoad = afterLoad;
+afterLoad = function () {
+  if ($('onlyMedia').checked) items = items.filter(i => MEDIA.test(i.name));
+  _origAfterLoad();
+};
+
+document.querySelectorAll('input').forEach(el => { if (el.type !== 'file') el.addEventListener('input', refresh); });
+['recursive', 'onlyMedia'].forEach(id => $(id).addEventListener('change', () => {
+  if (items.length) setMsg('Pick the folder again to apply this.', '');
+}));
+
+// ---------- in-place rename (Chrome / Edge) ----------
+async function renameOne(dirHandle, from, to) {
+  const fh = await dirHandle.getFileHandle(from);
+  if (typeof fh.move === 'function') {
+    if (from.toLowerCase() === to.toLowerCase()) {          // case-only change: go via a temp name
+      const tmp = to + '.renaming-' + Date.now();
+      await fh.move(tmp);
+      const th = await dirHandle.getFileHandle(tmp);
+      await th.move(to);
+    } else {
+      await fh.move(to);
+    }
+    return;
+  }
+  // Fallback for older browsers: stream copy, then delete the original.
+  const file = await fh.getFile();
+  const out = await dirHandle.getFileHandle(to, { create: true });
+  const w = await out.createWritable();
+  await file.stream().pipeTo(w);
+  await dirHandle.removeEntry(from);
+}
+
+async function exists(dirHandle, name) {
+  try { await dirHandle.getFileHandle(name); return true; } catch { return false; }
+}
+
+$('applyBtn').onclick = async () => {
+  const todo = items.filter(i => i.status === 'changed');
+  if (!todo.length) return;
+  if (!confirm(`Rename ${todo.length} file(s) in "${rootName}"?`)) return;
+  $('applyBtn').disabled = true;
+  lastRenames = [];
+  let ok = 0, fail = 0;
+  for (const [n, it] of todo.entries()) {
+    setMsg(`Renaming ${n + 1} / ${todo.length}…`);
+    try {
+      if (it.name.toLowerCase() !== it.newName.toLowerCase() && await exists(it.dirHandle, it.newName))
+        throw new Error('a file with that name already exists');
+      await renameOne(it.dirHandle, it.name, it.newName);
+      lastRenames.push({ dirHandle: it.dirHandle, from: it.name, to: it.newName });
+      it.name = it.newName; it.path = it.dir ? it.dir + '/' + it.name : it.name;
+      ok++;
+    } catch (e) {
+      it.problem = e.message || String(e); fail++;
+    }
+  }
+  refresh();
+  $('undoBtn').disabled = !lastRenames.length;
+  setMsg(`Done: ${ok} renamed` + (fail ? `, ${fail} failed (${todo.find(i => i.problem)?.problem || ''})` : '') + '.', fail ? 'bad' : 'ok');
+};
+
+$('undoBtn').onclick = async () => {
+  if (!lastRenames.length) return;
+  let ok = 0, fail = 0;
+  for (const r of [...lastRenames].reverse()) {
+    try {
+      await renameOne(r.dirHandle, r.to, r.from);
+      const it = items.find(i => i.dirHandle === r.dirHandle && i.name === r.to);
+      if (it) { it.name = r.from; it.path = it.dir ? it.dir + '/' + it.name : it.name; }
+      ok++;
+    } catch { fail++; }
+  }
+  lastRenames = [];
+  $('undoBtn').disabled = true;
+  refresh();
+  setMsg(`Undo: ${ok} restored` + (fail ? `, ${fail} failed` : '') + '.', fail ? 'bad' : 'ok');
+};
+
+// ---------- script download (any browser) ----------
+function download(name, text, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+$('batBtn').onclick = () => {
+  const q = s => '"' + s.replace(/%/g, '%%') + '"';
+  const lines = ['@echo off', 'chcp 65001 >nul', 'cd /d "%~dp0"', 'echo Renaming files...'];
+  for (const it of items.filter(i => i.status === 'changed')) {
+    const src = (it.dir ? it.dir.replace(/\//g, '\\') + '\\' : '') + it.name;
+    if (it.name.toLowerCase() === it.newName.toLowerCase()) {
+      const dirW = it.dir ? it.dir.replace(/\//g, '\\') + '\\' : '';
+      lines.push(`ren ${q(src)} ${q(it.newName + '.tmp~')}`);
+      lines.push(`ren ${q(dirW + it.newName + '.tmp~')} ${q(it.newName)}`);
+    } else {
+      lines.push(`if not exist ${q((it.dir ? it.dir.replace(/\//g, '\\') + '\\' : '') + it.newName)} ren ${q(src)} ${q(it.newName)}`);
+    }
+  }
+  lines.push('echo Done.', 'pause');
+  download(`rename-${rootName || 'files'}.bat`, lines.join('\r\n') + '\r\n', 'application/octet-stream');
+};
+
+$('shBtn').onclick = () => {
+  const q = s => "'" + s.replace(/'/g, `'\\''`) + "'";
+  const lines = ['#!/bin/bash', 'cd "$(dirname "$0")" || exit 1', 'echo "Renaming files..."'];
+  for (const it of items.filter(i => i.status === 'changed')) {
+    const pre = it.dir ? it.dir + '/' : '';
+    if (it.name.toLowerCase() === it.newName.toLowerCase())
+      lines.push(`mv -- ${q(pre + it.name)} ${q(pre + it.newName + '.tmp~')} && mv -- ${q(pre + it.newName + '.tmp~')} ${q(pre + it.newName)}`);
+    else
+      lines.push(`mv -n -- ${q(pre + it.name)} ${q(pre + it.newName)}`);
+  }
+  lines.push('echo "Done."');
+  download(`rename-${rootName || 'files'}.command`, lines.join('\n') + '\n', 'application/octet-stream');
+};
+
+refresh();
+</script>
+</body>
+</html>
